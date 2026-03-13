@@ -261,7 +261,7 @@ async def registerchars(ctx, filepath: str = "select.def"):
     save_registry(chars)
     await ctx.send(f"Registered {len(chars)} characters to `{REGISTRY_FILE}`. Use `!showregistry` to view them.")
     class CharacterSelectView(discord.ui.View):
-    def __init__(self, registry):
+        def __init__(self, registry):
         super().__init__(timeout=None)
         self.registry = registry
         self.selected_a = None
