@@ -389,6 +389,56 @@ class ShopView(discord.ui.View):
             except Exception:
                 pass
 
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def createbetgui(ctx):
+    """Open an admin GUI to pick two registered characters and start a match."""
+    registry = load_registry()
+    if not registry:
+        await ctx.send("No characters registered. Use `!registerchars` to import a select.def first.")
+        return
+
+    note = ""
+    if len(registry) > 25:
+        note = "\n\nNote: Discord selects show up to 25 options. Use `!showregistry` if you need a character not in the first 25."
+
+    embed = discord.Embed(
+        title="Create Match from Registry",
+        description="Pick character A and B from the dropdowns below." + note,
+        color=discord.Color.green()
+    )
+    view = CharacterSelectView(registry)
+    await ctx.send(embed=embed, view=view)
+
+@bot.command()
+async def shop(ctx):
+    """Text list of shop items."""
+    lines = []
+    for key, meta in SHOP_ITEMS.items():
+        price = compute_price(key)
+        if key.startswith("diaper"):
+            lines.append(f"- {key}: {price} pts — reduces odds by {int(meta['penalty']*100)}%")
+        elif key == "wedding_ring":
+            lines.append(f"- {key}: {price} pts — gives +{meta['bonus']} payout bonus")
+        elif key == "soap_shoes":
+            lines.append(f"- {key}: {price} pts — protects a character from diapers")
+        else:
+            lines.append(f"- {key}: {price} pts")
+    lines.append("\nBuy with `!buydiaper <character> <small|medium|large>`, `!buyring @user`, `!buysoap <character>`")
+    await ctx.send("__**Shop Items**__\n" + "\n".join(lines))
+
+@bot.command()
+async def shopgui(ctx):
+    """Interactive shop GUI."""
+    embed = discord.Embed(title="Puken Shop", description="Click buttons to view item details.", color=discord.Color.blue())
+    embed.add_field(name="diaper_small", value=f"{compute_price('diaper_small')} pts — -10%", inline=False)
+    embed.add_field(name="diaper_medium", value=f"{compute_price('diaper_medium')} pts — -25%", inline=False)
+    embed.add_field(name="diaper_large", value=f"{compute_price('diaper_large')} pts — -50%", inline=False)
+    embed.add_field(name="wedding_ring", value=f"{compute_price('wedding_ring')} pts — +0.5 payout", inline=False)
+    embed.add_field(name="soap_shoes", value=f"{compute_price('soap_shoes')} pts — protection", inline=False)
+    view = ShopView()
+    await ctx.send(embed=embed, view=view)
+
 if __name__ == '__main__':
     # Try env first (supports .env via load_dotenv above)
     token = os.environ.get('DISCORD_TOKEN') or os.environ.get('TOKEN')
