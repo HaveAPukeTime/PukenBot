@@ -274,6 +274,33 @@ async def showregistry(ctx, limit: int = 50):
 # ---------------------------
 # GUI to pick two characters and start a match
 # ---------------------------
+def store_gui_refs(message: discord.Message, view: discord.ui.View):
+    """Keep message ids in CURRENT_MATCH and keep view instance in-memory."""
+    try:
+        CURRENT_MATCH['gui_channel_id'] = message.channel.id
+        CURRENT_MATCH['gui_message_id'] = message.id
+        # in-memory only; lost on restart but useful while running
+        CURRENT_MATCH['gui_view'] = view
+    except Exception as e:
+        print("store_gui_refs error:", e)
+
+async def update_betting_gui():
+    """Edit the stored GUI message with the latest embed and active view."""
+    try:
+        if not CURRENT_MATCH:
+            return
+        chan_id = CURRENT_MATCH.get('gui_channel_id')
+        msg_id = CURRENT_MATCH.get('gui_message_id')
+        if not chan_id or not msg_id:
+            return
+        channel = bot.get_channel(int(chan_id)) or await bot.fetch_channel(int(chan_id))
+        message = await channel.fetch_message(int(msg_id))
+        view = CURRENT_MATCH.get('gui_view') or BettingView()
+        CURRENT_MATCH['gui_view'] = view
+        await message.edit(embed=build_betting_embed(), view=view)
+    except Exception as e:
+        print("update_betting_gui error:", e)
+
 class CharacterSelectView(discord.ui.View):
     def __init__(self, registry):
         super().__init__(timeout=120)
@@ -312,7 +339,7 @@ class CharacterSelectView(discord.ui.View):
         self.select_b.callback = select_b_callback
 
     @discord.ui.button(label="Start Match", style=discord.ButtonStyle.primary, custom_id="start_match_btn")
-    async def start_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+    async def start_btn(self, interaction: discord.Interaction):
         try:
             # ensure both are selected and not equal
             if not self.selected_a or not self.selected_b:
@@ -341,27 +368,22 @@ class CharacterSelectView(discord.ui.View):
                 'base_ratio_b': ratio_b,
                 'ratio_b': ratio_b,
                 'diapers': {},
-                'protections': {},
-                'gui_channel_id': None,
-                'gui_message_id': None
+                'protections': {}
             }
             BETS = {self.selected_a: {}, self.selected_b: {}}
 
-            # Build the initial betting GUI and send it as the interaction response
+            # Build and send the betting GUI as the interaction response
             try:
-                # build_betting_embed and BettingView exist below in the file
                 embed = build_betting_embed()
                 view = BettingView()
                 await interaction.response.send_message(embed=embed, view=view)
-                # Retrieve the message object for future edits
+                # retrieve the sent message so we can store refs
                 try:
                     msg = await interaction.original_response()
-                    CURRENT_MATCH['gui_channel_id'] = msg.channel.id
-                    CURRENT_MATCH['gui_message_id'] = msg.id
+                    store_gui_refs(msg, view)
                 except Exception as e:
-                    print("start_btn: failed to store gui message info:", e)
+                    print("start_btn: failed to retrieve/store gui message:", e)
             except Exception as e:
-                # If we can't send embed+view, still announce the match
                 print("start_btn: failed to post betting GUI:", e)
                 try:
                     await interaction.followup.send(f"**Betting is now open!**\n**{self.selected_a}** {ratio_a:.2f}x vs **{self.selected_b}** {ratio_b:.2f}x\nUse `!openbetgui` to open the betting GUI.", ephemeral=False)
@@ -372,6 +394,7 @@ class CharacterSelectView(discord.ui.View):
             self.stop()
             # remove the selection view from the original message where it was posted
             try:
+                # interaction.message is the message that had the selection view
                 await interaction.message.edit(view=None)
             except Exception as e:
                 print("start_btn: failed to edit original message to remove view:", e)
