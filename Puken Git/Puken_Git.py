@@ -341,17 +341,37 @@ class CharacterSelectView(discord.ui.View):
                 'base_ratio_b': ratio_b,
                 'ratio_b': ratio_b,
                 'diapers': {},
-                'protections': {}
+                'protections': {},
+                'gui_channel_id': None,
+                'gui_message_id': None
             }
             BETS = {self.selected_a: {}, self.selected_b: {}}
-            await interaction.response.send_message(
-                f"**Betting is now open!**\n**{self.selected_a}** has odds of **{ratio_a:.2f}x**\n**{self.selected_b}** has odds of **{ratio_b:.2f}x**\nUse `!bet [character] [amount]` to place your bet. Use `!shop` to view purchasable items.",
-                ephemeral=False
-            )
-            # disable view (prevent re-use)
-            self.stop()
+
+            # Build the initial betting GUI and send it as the interaction response
             try:
-                # best-effort remove view from the original message; ignore failures but log them
+                # build_betting_embed and BettingView exist below in the file
+                embed = build_betting_embed()
+                view = BettingView()
+                await interaction.response.send_message(embed=embed, view=view)
+                # Retrieve the message object for future edits
+                try:
+                    msg = await interaction.original_response()
+                    CURRENT_MATCH['gui_channel_id'] = msg.channel.id
+                    CURRENT_MATCH['gui_message_id'] = msg.id
+                except Exception as e:
+                    print("start_btn: failed to store gui message info:", e)
+            except Exception as e:
+                # If we can't send embed+view, still announce the match
+                print("start_btn: failed to post betting GUI:", e)
+                try:
+                    await interaction.followup.send(f"**Betting is now open!**\n**{self.selected_a}** {ratio_a:.2f}x vs **{self.selected_b}** {ratio_b:.2f}x\nUse `!openbetgui` to open the betting GUI.", ephemeral=False)
+                except Exception:
+                    pass
+
+            # disable selection view (prevent re-use)
+            self.stop()
+            # remove the selection view from the original message where it was posted
+            try:
                 await interaction.message.edit(view=None)
             except Exception as e:
                 print("start_btn: failed to edit original message to remove view:", e)
@@ -362,286 +382,26 @@ class CharacterSelectView(discord.ui.View):
             except Exception:
                 pass
 
-# Interactive betting GUI: modals + view for users to place bets via buttons/selects
-class BetAmountModal(discord.ui.Modal):
-    def __init__(self, character: str, requester_id: str):
-        super().__init__(title=f"Bet on {character}")
-        self.character = character
-        self.requester_id = requester_id
-        # single text input for amount
-        self.amount = discord.ui.TextInput(label="Amount (integer)", style=discord.TextStyle.short, placeholder="Enter points to bet", required=True)
-        self.add_item(self.amount)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            # parse and validate
-            try:
-                amt = int(self.amount.value.strip())
-            except Exception:
-                await interaction.response.send_message("Please enter a valid integer amount.", ephemeral=True)
-                return
-
-            if amt <= 0:
-                await interaction.response.send_message("You must bet a positive amount.", ephemeral=True)
-                return
-
-            # global state
-            global BETTING_OPEN, CURRENT_MATCH, BETS
-            if not BETTING_OPEN or not CURRENT_MATCH:
-                await interaction.response.send_message("No active betting round.", ephemeral=True)
-                return
-
-            user_id = str(interaction.user.id)
-            points = load_points()
-            if user_id not in points:
-                points[user_id] = STARTING_POINTS
-
-            if points[user_id] < amt:
-                await interaction.response.send_message(f"You don't have enough points. You have {points[user_id]}.", ephemeral=True)
-                return
-
-            # check existing bet
-            if user_id in BETS.get(CURRENT_MATCH['char_a'], {}) or user_id in BETS.get(CURRENT_MATCH['char_b'], {}):
-                await interaction.response.send_message("You have already placed a bet for this match. Use the edit command to change it.", ephemeral=True)
-                return
-
-            # determine exact bet key name (case sensitive keys in BETS)
-            if self.character.lower() == CURRENT_MATCH['char_a'].lower():
-                bet_key = CURRENT_MATCH['char_a']
-            elif self.character.lower() == CURRENT_MATCH['char_b'].lower():
-                bet_key = CURRENT_MATCH['char_b']
-            else:
-                await interaction.response.send_message("Invalid character for the current match.", ephemeral=True)
-                return
-
-            # deduct points and store bet
-            points[user_id] -= amt
-            save_points(points)
-            BETS.setdefault(bet_key, {})[user_id] = amt
-
-            # update GUI (if open)
-            await update_betting_gui()
-
-            # ring announcement if present
-            rings = load_rings()
-            if user_id in rings and float(rings.get(user_id, 0)) > 0:
-                # short public confirmation plus required phrase
-                await interaction.response.send_message(f"{interaction.user.mention} placed {amt} on {bet_key}. adding littles up!", ephemeral=False)
-            else:
-                await interaction.response.send_message(f"{interaction.user.mention} placed {amt} on {bet_key}.", ephemeral=False)
-        except Exception as e:
-            print("BetAmountModal.on_submit error:", e)
-            try:
-                await interaction.response.send_message("An internal error occurred placing your bet.", ephemeral=True)
-            except Exception:
-                pass
-
-    async def on_error(self, interaction: discord.Interaction, error: Exception):
-        print("BetAmountModal.on_error:", error)
-        try:
-            await interaction.response.send_message("An error occurred processing the bet.", ephemeral=True)
-        except Exception:
-            pass
-
-# Build an embed for the current betting odds
-def build_betting_embed() -> discord.Embed:
-    """Build an up-to-date embed summarizing current match odds and bets."""
-    if not CURRENT_MATCH:
-        return discord.Embed(title="No active match", description="There is no betting match open.", color=discord.Color.dark_grey())
-
-    char_a = CURRENT_MATCH['char_a']
-    char_b = CURRENT_MATCH['char_b']
-    ratio_a = float(CURRENT_MATCH.get('ratio_a', CURRENT_MATCH.get('base_ratio_a', 1.0)))
-    ratio_b = float(CURRENT_MATCH.get('ratio_b', CURRENT_MATCH.get('base_ratio_b', 1.0)))
-
-    bets_a = BETS.get(char_a, {}) if isinstance(BETS, dict) else {}
-    bets_b = BETS.get(char_b, {}) if isinstance(BETS, dict) else {}
-    total_a = sum(bets_a.values()) if bets_a else 0
-    total_b = sum(bets_b.values()) if bets_b else 0
-    total = total_a + total_b
-
-    # implied probabilities from decimal odds (not accounting for vig)
-    implied_a = (1.0 / ratio_a) if ratio_a > 0 else 0.0
-    implied_b = (1.0 / ratio_b) if ratio_b > 0 else 0.0
-
-    market_share_a = (total_a / total) if total > 0 else 0.0
-    market_share_b = (total_b / total) if total > 0 else 0.0
-
-    desc = (
-        f"Betting is open for:\n"
-        f"**A:** {char_a} — {ratio_a:.2f}x ({implied_a*100:.1f}% implied)\n"
-        f"**B:** {char_b} — {ratio_b:.2f}x ({implied_b*100:.1f}% implied)\n\n"
-        f"Total staked: {total} points\n"
-    )
-
-    embed = discord.Embed(title="Place Your Bets", description=desc, color=discord.Color.blurple())
-    embed.add_field(
-        name=f"{char_a}",
-        value=(
-            f"Odds: {ratio_a:.2f}x\n"
-            f"Bets: {total_a} pts\n"
-            f"Bettors: {len(bets_a)}\n"
-            f"Market share: {market_share_a*100:.1f}%"
-        ),
-        inline=True
-    )
-    embed.add_field(
-        name=f"{char_b}",
-        value=(
-            f"Odds: {ratio_b:.2f}x\n"
-            f"Bets: {total_b} pts\n"
-            f"Bettors: {len(bets_b)}\n"
-            f"Market share: {market_share_b*100:.1f}%"
-        ),
-        inline=True
-    )
-    return embed
-
-class BettingView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    async def _ensure_active_match(self, interaction: discord.Interaction):
-        if not BETTING_OPEN or not CURRENT_MATCH:
-            await interaction.response.send_message("There is no active betting match right now.", ephemeral=True)
-            return False
-        return True
-
-    @discord.ui.button(label="Bet on A", style=discord.ButtonStyle.primary, custom_id="betgui_bet_a")
-    async def bet_a(self, button: discord.ui.Button, interaction: discord.Interaction):
-        try:
-            if not await self._ensure_active_match(interaction):
-                return
-            await interaction.response.send_modal(BetAmountModal(CURRENT_MATCH['char_a'], str(interaction.user.id)))
-        except Exception as e:
-            print("bet_a error:", e)
-            try:
-                await interaction.response.send_message("Failed to open bet modal.", ephemeral=True)
-            except Exception:
-                pass
-
-    @discord.ui.button(label="Bet on B", style=discord.ButtonStyle.danger, custom_id="betgui_bet_b")
-    async def bet_b(self, button: discord.ui.Button, interaction: discord.Interaction):
-        try:
-            if not await self._ensure_active_match(interaction):
-                return
-            await interaction.response.send_modal(BetAmountModal(CURRENT_MATCH['char_b'], str(interaction.user.id)))
-        except Exception as e:
-            print("bet_b error:", e)
-            try:
-                await interaction.response.send_message("Failed to open bet modal.", ephemeral=True)
-            except Exception:
-                pass
-
-    @discord.ui.button(label="Bet All", style=discord.ButtonStyle.secondary, custom_id="betgui_bet_all")
-    async def bet_all(self, button: discord.ui.Button, interaction: discord.Interaction):
-        try:
-            if not await self._ensure_active_match(interaction):
-                return
-            user_id = str(interaction.user.id)
-            points = load_points()
-            if user_id not in points:
-                points[user_id] = STARTING_POINTS
-                save_points(points)
-            amt = points[user_id]
-            if amt <= 0:
-                await interaction.response.send_message("You have no points to bet.", ephemeral=True)
-                return
-
-            if user_id in BETS.get(CURRENT_MATCH['char_a'], {}) or user_id in BETS.get(CURRENT_MATCH['char_b'], {}):
-                await interaction.response.send_message("You have already placed a bet for this match.", ephemeral=True)
-                return
-
-            bet_key = CURRENT_MATCH['char_a']
-            BETS.setdefault(bet_key, {})[user_id] = amt
-            points[user_id] = 0
-            save_points(points)
-
-            # update GUI (if open)
-            await update_betting_gui()
-
-            rings = load_rings()
-            if user_id in rings and float(rings.get(user_id, 0)) > 0:
-                await interaction.response.send_message(f"{interaction.user.mention} bet all ({amt}) on {bet_key}. adding littles up!", ephemeral=False)
-            else:
-                await interaction.response.send_message(f"{interaction.user.mention} bet all ({amt}) on {bet_key}.", ephemeral=False)
-        except Exception as e:
-            print("bet_all error:", e)
-            try:
-                await interaction.response.send_message("Failed to place Bet All.", ephemeral=True)
-            except Exception:
-                pass
-
-    @discord.ui.button(label="Bet Random", style=discord.ButtonStyle.success, custom_id="betgui_bet_random")
-    async def bet_random(self, button: discord.ui.Button, interaction: discord.Interaction):
-        try:
-            if not await self._ensure_active_match(interaction):
-                return
-            user_id = str(interaction.user.id)
-            points = load_points()
-            if user_id not in points:
-                points[user_id] = STARTING_POINTS
-                save_points(points)
-            amt = 10
-            if points[user_id] < amt:
-                await interaction.response.send_message(f"You don't have enough points ({points[user_id]}) to random bet {amt}.", ephemeral=True)
-                return
-            if user_id in BETS.get(CURRENT_MATCH['char_a'], {}) or user_id in BETS.get(CURRENT_MATCH['char_b'], {}):
-                await interaction.response.send_message("You have already placed a bet for this match.", ephemeral=True)
-                return
-            chosen = random.choice([CURRENT_MATCH['char_a'], CURRENT_MATCH['char_b']])
-            points[user_id] -= amt
-            save_points(points)
-            BETS.setdefault(chosen, {})[user_id] = amt
-
-            # update GUI (if open)
-            await update_betting_gui()
-
-            rings = load_rings()
-            if user_id in rings and float(rings.get(user_id, 0)) > 0:
-                await interaction.response.send_message(f"{interaction.user.mention} placed a random bet of {amt} on {chosen}. adding littles up!", ephemeral=False)
-            else:
-                await interaction.response.send_message(f"{interaction.user.mention} placed a random bet of {amt} on {chosen}.", ephemeral=False)
-        except Exception as e:
-            print("bet_random error:", e)
-            try:
-                await interaction.response.send_message("Failed to place random bet.", ephemeral=True)
-            except Exception:
-                pass
-
-    @discord.ui.button(label="Refresh Odds", style=discord.ButtonStyle.gray, custom_id="betgui_refresh")
-    async def refresh(self, button: discord.ui.Button, interaction: discord.Interaction):
-        try:
-            if not await self._ensure_active_match(interaction):
-                return
-            embed = build_betting_embed()
-            # edit the message that contains the view with updated embed
-            await interaction.response.edit_message(embed=embed, view=self)
-        except Exception as e:
-            print("refresh error:", e)
-            try:
-                await interaction.response.send_message("Failed to refresh odds.", ephemeral=True)
-            except Exception:
-                pass
-
-# Command to open the betting GUI for a current match
 @bot.command()
-async def openbetgui(ctx):
-    """Open an interactive betting GUI (buttons + modals) for the current match."""
-    if not BETTING_OPEN or not CURRENT_MATCH:
-        await ctx.send("There is no active betting match. Start one with !betopen or use the GUI to create one.")
+@commands.has_permissions(administrator=True)
+async def createbetgui(ctx):
+    """Open an admin GUI to pick two registered characters and start a match."""
+    registry = load_registry()
+    if not registry:
+        await ctx.send("No characters registered. Use `!registerchars` to import a select.def first.")
         return
 
-    embed = build_betting_embed()
-    view = BettingView()
-    msg = await ctx.send(embed=embed, view=view)
+    note = ""
+    if len(registry) > 25:
+             note = "\n\nNote: Discord selects can show up to 25 options. Use `!showregistry` if you need to find a character not in the first 25."
 
-    # store GUI message references so we can auto-update it later
-    try:
-        CURRENT_MATCH['gui_channel_id'] = ctx.channel.id
-        CURRENT_MATCH['gui_message_id'] = msg.id
-    except Exception as e:
-        print("openbetgui: failed to store gui message info:", e)
+    embed = discord.Embed(
+        title="Create Match from Registry",
+        description="Pick character A and B from the dropdowns below." + note,
+        color=discord.Color.green()
+    )
+    view = CharacterSelectView(registry)
+    await ctx.send(embed=embed, view=view)
 
 if __name__ == '__main__':
     # Read token (supports .env via load_dotenv above)
