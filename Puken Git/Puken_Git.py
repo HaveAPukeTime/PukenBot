@@ -29,7 +29,8 @@ SHOP_ITEMS = {
     "diaper_small": {"price": 100, "penalty": 0.10},   # reduces chosen character ratio by 10%
     "diaper_medium": {"price": 250, "penalty": 0.25},  # reduces chosen character ratio by 25%
     "diaper_large": {"price": 500, "penalty": 0.50},   # reduces chosen character ratio by 50%
-    "wedding_ring": {"price": 1000, "bonus": 0.5}      # gives chosen user +0.5 to payout ratios
+    "wedding_ring": {"price": 1000, "bonus": 0.5},     # gives chosen user +0.5 to payout ratios
+    "soap_shoes": {"price": 300, "protects": ["diaper"], "display_name": "Newt's Soap Shoes"}  # protects a character from diaper effects
 }
 
 # File backed storage for points, win/loss and ring bonuses
@@ -101,7 +102,8 @@ def compute_price(item_key: str) -> int:
         "diaper_small": 10,
         "diaper_medium": 20,
         "diaper_large": 30,
-        "wedding_ring": 40
+        "wedding_ring": 40,
+        "soap_shoes": 15
     }
     base = SHOP_ITEMS.get(item_key, {}).get('price', 0)
     n = matches_needed.get(item_key, 0)
@@ -174,7 +176,8 @@ async def betopen(ctx, character_a: str, ratio_a: float, character_b: str, ratio
         'char_b': character_b,
         'base_ratio_b': ratio_b,
         'ratio_b': ratio_b,
-        'diapers': {}  # mapping character -> list of applied diaper dicts
+        'diapers': {},      # mapping character -> list of applied diaper dicts
+        'protections': {}   # mapping character -> list of protection items (e.g. soap_shoes)
     }
     BETS = {character_a: {}, character_b: {}}
 
@@ -411,7 +414,7 @@ async def betsummary(ctx):
     message += "\n"
 
     # Summary for the second character
-    bets_b = BETS.get(char_b, {})
+    bets_b = BETS.get(char_b, {}
     total_b = sum(bets_b.values())
     message += f"**{char_b}** (Total Bets: {total_b} puken points) — Current Odds: {CURRENT_MATCH.get('ratio_b'):.2f}x\n"
     if bets_b:
@@ -430,6 +433,16 @@ async def betsummary(ctx):
             message += f"- {char}:\n"
             for item in applied:
                 message += f"  * {item['name']} (-{int(item['penalty']*100)}%) bought by <@{item['buyer']}> for {item['price']} points\n"
+
+    # Show protections (e.g. Newt's Soap Shoes) if any
+    protections = CURRENT_MATCH.get('protections', {})
+    if protections:
+        message += "\n**Protections (immunities):**\n"
+        for char, applied in protections.items():
+            message += f"- {char}:\n"
+            for item in applied:
+                display = SHOP_ITEMS.get(item['name'], {}).get('display_name', item['name'])
+                message += f"  * {display} bought by <@{item['buyer']}> for {item['price']} points\n"
 
     await ctx.send(message)
 
@@ -595,7 +608,8 @@ async def shop(ctx):
     msg += "- diaper_medium: 250 points (reduces a character's odds by 25%)\n"
     msg += "- diaper_large: 500 points (reduces a character's odds by 50%)\n"
     msg += "- wedding_ring: 1000 points (give a user +0.5 bonus to payouts)\n"
-    msg += "\nUsage: `!buydiaper <character> <small|medium|large>` or `!buyring @user`\n"
+    msg += "- soap_shoes: 300 points (Newt's Soap Shoes — protects a character from diapers; says \"uh meow?\" when bought)\n"
+    msg += "\nUsage: `!buydiaper <character> <small|medium|large>`, `!buyring @user` or `!buysoap <character>`\n"
     await ctx.send(msg)
 
 # --- GUI for the shop using Discord UI components ---
@@ -643,6 +657,16 @@ class ShopView(discord.ui.View):
         )
         await interaction.response.send_message(text, ephemeral=True)
 
+    @discord.ui.button(label="soap_shoes", style=discord.ButtonStyle.success, custom_id="shop_soap_shoes")
+    async def soap_shoes_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        text = (
+            "**Newt's Soap Shoes** — 300 points\n"
+            "Effect: Protects a character from diapers for the remainder of the match and removes already-applied diapers for that character.\n"
+            "How to use: While a bet is open, use `!buysoap <character>` to apply. The bot will say `uh meow?` when bought.\n"
+            "Notes: Protections prevent future diaper purchases targeting that character."
+        )
+        await interaction.response.send_message(text, ephemeral=True)
+
     @discord.ui.button(label="Close", style=discord.ButtonStyle.gray, custom_id="shop_close")
     async def close_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
         try:
@@ -664,7 +688,8 @@ async def shopgui(ctx):
     embed.add_field(name="diaper_medium", value=f"{compute_price('diaper_medium')} points — reduces odds by 25%", inline=False)
     embed.add_field(name="diaper_large", value=f"{compute_price('diaper_large')} points — reduces odds by 50%", inline=False)
     embed.add_field(name="wedding_ring", value=f"{compute_price('wedding_ring')} points — gives a +0.5 payout bonus to a user", inline=False)
-    embed.add_field(name="Buy commands", value="`!buydiaper <character> <small|medium|large>`\n`!buyring @user`", inline=False)
+    embed.add_field(name="soap_shoes", value=f"{compute_price('soap_shoes')} points — Newt's Soap Shoes (protects from diapers)", inline=False)
+    embed.add_field(name="Buy commands", value="`!buydiaper <character> <small|medium|large>`\n`!buyring @user`\n`!buysoap <character>`", inline=False)
 
     view = ShopView()
     await ctx.send(embed=embed, view=view)
@@ -701,10 +726,6 @@ async def buydiaper(ctx, character: str, size: str):
         points[buyer_id] = STARTING_POINTS
         save_points(points)
 
-    if points[buyer_id] < price:
-        await ctx.send(f"You don't have enough points to buy this diaper. You need {price} points.")
-        return
-
     target_char = None
     if character.lower() == CURRENT_MATCH['char_a'].lower():
         target_char = CURRENT_MATCH['char_a']
@@ -714,6 +735,16 @@ async def buydiaper(ctx, character: str, size: str):
         ratio_key = 'ratio_b'
     else:
         await ctx.send(f"Invalid character. Please pick `{CURRENT_MATCH['char_a']}` or `{CURRENT_MATCH['char_b']}`.")
+        return
+
+    # Check for protections (e.g. Newt's Soap Shoes)
+    protections = CURRENT_MATCH.get('protections', {})
+    if target_char in protections and protections[target_char]:
+        await ctx.send(f"You cannot diaper {target_char}; they are protected (Newt's Soap Shoes).")
+        return
+
+    if points[buyer_id] < price:
+        await ctx.send(f"You don't have enough points to buy this diaper. You need {price} points.")
         return
 
     # Deduct points from buyer
@@ -738,6 +769,74 @@ async def buydiaper(ctx, character: str, size: str):
     CURRENT_MATCH['diapers'] = diapers
 
     await ctx.send(f"{ctx.author.mention} bought a **{size_key} diaper** for **{target_char}** for {price} points. {target_char}'s odds changed {old_ratio:.2f}x -> {new_ratio:.2f}x.")
+
+@bot.command()
+async def buysoap(ctx, character: str):
+    """Buy Newt's Soap Shoes to protect a character from diapers and remove already-applied diapers.
+    Usage: !buysoap <character>"""
+    global CURRENT_MATCH, BETTING_OPEN
+
+    if not BETTING_OPEN or not CURRENT_MATCH:
+        await ctx.send("No active betting match to target. Open a match with `!betopen` first.")
+        return
+
+    item_key = "soap_shoes"
+    item = SHOP_ITEMS[item_key]
+    price = compute_price(item_key)
+
+    buyer_id = str(ctx.author.id)
+    points = load_points()
+    if buyer_id not in points:
+        points[buyer_id] = STARTING_POINTS
+        save_points(points)
+
+    if points[buyer_id] < price:
+        await ctx.send(f"You don't have enough points to buy Newt's Soap Shoes. You need {price} points.")
+        return
+
+    target_char = None
+    if character.lower() == CURRENT_MATCH['char_a'].lower():
+        target_char = CURRENT_MATCH['char_a']
+        ratio_key = 'ratio_a'
+        base_key = 'base_ratio_a'
+    elif character.lower() == CURRENT_MATCH['char_b'].lower():
+        target_char = CURRENT_MATCH['char_b']
+        ratio_key = 'ratio_b'
+        base_key = 'base_ratio_b'
+    else:
+        await ctx.send(f"Invalid character. Please pick `{CURRENT_MATCH['char_a']}` or `{CURRENT_MATCH['char_b']}`.")
+        return
+
+    # Deduct points from buyer
+    points[buyer_id] -= price
+    save_points(points)
+
+    # Remove already-applied diapers for that character (if any) and reset ratio to base
+    diapers = CURRENT_MATCH.get('diapers', {})
+    removed_count = 0
+    if target_char in diapers:
+        removed_count = len(diapers[target_char])
+        del diapers[target_char]
+    CURRENT_MATCH['diapers'] = diapers
+
+    # Reset ratio to base ratio (diapers removed). Protections prevent future diapering.
+    old_ratio = CURRENT_MATCH[ratio_key]
+    CURRENT_MATCH[ratio_key] = CURRENT_MATCH[base_key]
+    new_ratio = CURRENT_MATCH[ratio_key]
+
+    # Record protection application
+    protections = CURRENT_MATCH.get('protections', {})
+    if target_char not in protections:
+        protections[target_char] = []
+    protections[target_char].append({
+        "name": item_key,
+        "price": price,
+        "buyer": buyer_id
+    })
+    CURRENT_MATCH['protections'] = protections
+
+    # Send the required phrase and info
+    await ctx.send(f"{ctx.author.mention} bought **Newt's Soap Shoes** for **{target_char}** for {price} points. uh meow?\nRemoved {removed_count} diapers. {target_char}'s odds changed {old_ratio:.2f}x -> {new_ratio:.2f}x.")
 
 @bot.command()
 async def buyring(ctx, member: discord.Member):
