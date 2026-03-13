@@ -271,7 +271,7 @@ async def registerchars(ctx, filepath: str = "select.def"):
         self.add_item(CharacterSelectDropdown(self, "A"))
         self.add_item(CharacterSelectDropdown(self, "B"))
 class CharacterSelectDropdown(discord.ui.Select):
-    def __init__(self, parent_view, slot):
+        def __init__(self, parent_view, slot):
         self.parent_view = parent_view
         self.slot = slot  # "A" or "B"
 
