@@ -1066,11 +1066,3 @@ async def buyring(ctx, member: discord.Member):
     rings[target_id] = prev + bonus  # allow stacking if desired
     save_rings(rings)
     await ctx.send(f"{ctx.author.mention} bought a wedding ring and gave <@{target_id}> a +{bonus:.1f} payout bonus. (Use this to 'erp' someone.)")
-
-
-if __name__ == "__main__":
-    TOKEN = os.getenv("DISCORD_TOKEN")
-    if not TOKEN:
-        print("ERROR: DISCORD_TOKEN not set. Create a .env file or set an environment variable. See README.md for details.")
-        raise SystemExit(1)
-    bot.run(TOKEN)
