@@ -4,6 +4,8 @@ import json
 import random
 import asyncio
 import os
+import logging
+import traceback
 
 # try to support .env files (optional)
 try:
@@ -11,6 +13,9 @@ try:
     load_dotenv()
 except Exception:
     pass
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # Define the bot's prefix and intents
 intents = discord.Intents.default()
@@ -356,3 +361,19 @@ class CharacterSelectView(discord.ui.View):
                 await interaction.response.send_message("An internal error occurred starting the match.", ephemeral=True)
             except Exception:
                 pass
+
+if __name__ == '__main__':
+    # Read token from environment (supports .env via load_dotenv above)
+    token = os.environ.get('DISCORD_TOKEN') or os.environ.get('TOKEN')
+    if not token:
+        print("Discord token not found. Set DISCORD_TOKEN or TOKEN environment variable (or add to .env).")
+        print("Example (Windows PowerShell): $env:DISCORD_TOKEN = 'your_token_here'; python 'Puken Git\\Puken_Git.py'")
+        raise SystemExit(1)
+
+    print("Discord token found — starting bot. (Token is not printed.)")
+    try:
+        bot.run(token)
+    except Exception:
+        logging.exception("Failed to start bot. Full traceback follows:")
+        # re-raise so any supervising process/IDE shows the error
+        raise
