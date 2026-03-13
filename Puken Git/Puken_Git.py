@@ -374,13 +374,7 @@ async def betopen(ctx, character_a: str, ratio_a: float, character_b: str, ratio
         'char_b': character_b,
         'base_ratio_b': ratio_b,
         'ratio_b': ratio_b,
-<<<<<<< HEAD
-        'diapers': {},  # mapping character -> list of applied diaper dicts
-        'protections': {}
-=======
-        'diapers': {},      # mapping character -> list of applied diaper dicts
-        'protections': {}   # mapping character -> list of protection items (e.g. soap_shoes)
->>>>>>> 1c146965930be3c5317d9bd9c5f565fd1794219b
+        'diapers': {}  # mapping character -> list of applied diaper dicts
     }
     BETS = {character_a: {}, character_b: {}}
 
@@ -617,7 +611,7 @@ async def betsummary(ctx):
     message += "\n"
 
     # Summary for the second character
-    bets_b = BETS.get(char_b, {}
+    bets_b = BETS.get(char_b, {})
     total_b = sum(bets_b.values())
     message += f"**{char_b}** (Total Bets: {total_b} puken points) — Current Odds: {CURRENT_MATCH.get('ratio_b'):.2f}x\n"
     if bets_b:
