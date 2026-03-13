@@ -1,7 +1,9 @@
 ﻿# Puken Redux — Quick Setup
-
+THIS REQUIRES YOU TO SET UP A DISCORD BOT THROUGH DEVELOPER PORTAL!!!!:
+https://discord.com/developers
+How to set up a bot (skip coding with py, this bot just requires the token and you run the .py locally):
+https://www.youtube.com/watch?v=YD_N6Ffoojw
 Do NOT commit your bot token. Use the environment variable DISCORD_TOKEN or a local `.env` file.
-
 Quick setup:
 - Install dependencies: `pip install -r requirements.txt`
 - Create `.env` from `.env.example` and set `DISCORD_TOKEN`.
