@@ -642,3 +642,17 @@ async def openbetgui(ctx):
         CURRENT_MATCH['gui_message_id'] = msg.id
     except Exception as e:
         print("openbetgui: failed to store gui message info:", e)
+
+if __name__ == '__main__':
+    # Read token (supports .env via load_dotenv above)
+    token = os.environ.get('DISCORD_TOKEN') or os.environ.get('TOKEN')
+    if not token:
+        logging.error("Discord token not found. Set DISCORD_TOKEN or TOKEN environment variable or add a .env file.")
+        raise SystemExit(1)
+
+    logging.info("Discord token found — starting bot.")
+    try:
+        bot.run(token)
+    except Exception:
+        logging.exception("bot.run() failed with an exception:")
+        raise
