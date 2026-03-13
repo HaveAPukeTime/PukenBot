@@ -29,8 +29,85 @@ SHOP_ITEMS = {
     "diaper_small": {"price": 100, "penalty": 0.10},   # reduces chosen character ratio by 10%
     "diaper_medium": {"price": 250, "penalty": 0.25},  # reduces chosen character ratio by 25%
     "diaper_large": {"price": 500, "penalty": 0.50},   # reduces chosen character ratio by 50%
-    "wedding_ring": {"price": 1000, "bonus": 0.5}      # gives chosen user +0.5 to payout ratios
+    "wedding_ring": {"price": 1000, "bonus": 0.5},     # gives chosen user +0.5 to payout ratios
+    "soap_shoes": {"price": 300, "protects": ["diaper"], "display_name": "Newt's Soap Shoes"}  # protects a character from diaper effects
 }
+
+# ---------------------------
+# Registry file helpers
+# ---------------------------
+REGISTRY_FILE = "character_registry.json"
+
+def load_registry():
+    try:
+        with open(REGISTRY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+def save_registry(chars):
+    with open(REGISTRY_FILE, "w", encoding="utf-8") as f:
+        json.dump(chars, f, indent=4, ensure_ascii=False)
+
+def parse_select_def(path: str):
+    """
+    Parse a MUGEN select.def and return a cleaned list of character display names.
+
+    Rules:
+    - Find the [Characters] section and read lines until the next [Section] or EOF.
+    - Skip "empty", "randomselect" (case-insensitive) and blank lines and comments (lines starting with ';').
+    - Clean lines: strip trailing ",, order=..." chunks, strip .def extensions and folder paths.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+
+    # find [Characters] section (case-insensitive)
+    start_idx = None
+    for i, ln in enumerate(lines):
+        if ln.strip().lower().startswith("[characters]"):
+            start_idx = i + 1
+            break
+    if start_idx is None:
+        return []
+
+    chars = []
+    for ln in lines[start_idx:]:
+        s = ln.strip()
+        if not s:
+            continue
+        if s.startswith(";"):
+            continue
+        # stop if hits another section
+        if s.startswith("[") and s.endswith("]"):
+            break
+        lower = s.lower()
+        if lower == "empty" or lower == "randomselect":
+            continue
+
+        # remove trailing ",, order=..." or any ",," suffix
+        if ",," in s:
+            s = s.split(",,", 1)[0].strip()
+
+        # if contains path separators, take last segment
+        if "\\" in s or "/" in s:
+            s = s.replace("/", "\\")
+            s = s.split("\\")[-1].strip()
+
+        # strip .def suffix if present
+        if s.lower().endswith(".def"):
+            s = s[:-4].strip()
+
+        # final cleanup
+        s = s.strip()
+        if not s:
+            continue
+
+        if s not in chars:
+            chars.append(s)
+    return chars
 
 # File backed storage for points, win/loss and ring bonuses
 def load_points():
@@ -101,7 +178,8 @@ def compute_price(item_key: str) -> int:
         "diaper_small": 10,
         "diaper_medium": 20,
         "diaper_large": 30,
-        "wedding_ring": 40
+        "wedding_ring": 40,
+        "soap_shoes": 15
     }
     base = SHOP_ITEMS.get(item_key, {}).get('price', 0)
     n = matches_needed.get(item_key, 0)
@@ -154,6 +232,128 @@ async def leaderboard(ctx):
 
     await ctx.send(leaderboard_msg)
 
+# ---------------------------
+# Commands to manage registry
+# ---------------------------
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def registerchars(ctx, filepath: str = "select.def"):
+    """
+    Parse a select.def and store characters into the persistent registry JSON.
+    Usage: !registerchars path/to/select.def
+    If no path is provided the bot will attempt to read ./select.def
+    """
+    try:
+        chars = parse_select_def(filepath)
+    except FileNotFoundError:
+        await ctx.send(f"select.def not found at `{filepath}`.")
+        return
+
+    if not chars:
+        await ctx.send("No characters found in the provided select.def (or section missing).")
+        return
+
+    save_registry(chars)
+    await ctx.send(f"Registered {len(chars)} characters to `{REGISTRY_FILE}`. Use `!showregistry` to view them.")
+
+@bot.command()
+async def showregistry(ctx, limit: int = 50):
+    """Show registered characters (up to `limit`)."""
+    chars = load_registry()
+    if not chars:
+        await ctx.send("No characters registered. Use `!registerchars` to import a select.def.")
+        return
+    display = "\n".join(f"{i+1}. {name}" for i, name in enumerate(chars[:limit]))
+    await ctx.send(f"**Registered characters (showing {min(limit, len(chars))} of {len(chars)}):**\n{display}")
+
+# ---------------------------
+# GUI to pick two characters and start a match
+# ---------------------------
+class CharacterSelectView(discord.ui.View):
+    def __init__(self, registry):
+        super().__init__(timeout=120)
+        # limit to first 25 choices (discord select limit)
+        options = [discord.SelectOption(label=name, value=name) for name in registry[:25]]
+        self.select_a = discord.ui.Select(placeholder="Choose character A", min_values=1, max_values=1, options=options, custom_id="char_select_a")
+        self.select_b = discord.ui.Select(placeholder="Choose character B", min_values=1, max_values=1, options=options, custom_id="char_select_b")
+        self.add_item(self.select_a)
+        self.add_item(self.select_b)
+        self.selected_a = None
+        self.selected_b = None
+
+        async def select_a_callback(interaction: discord.Interaction):
+            self.selected_a = self.select_a.values[0]
+            await interaction.response.send_message(f"Selected A: {self.selected_a}", ephemeral=True)
+
+        async def select_b_callback(interaction: discord.Interaction):
+            self.selected_b = self.select_b.values[0]
+            await interaction.response.send_message(f"Selected B: {self.selected_b}", ephemeral=True)
+
+        self.select_a.callback = select_a_callback
+        self.select_b.callback = select_b_callback
+
+    @discord.ui.button(label="Start Match", style=discord.ButtonStyle.primary, custom_id="start_match_btn")
+    async def start_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        # ensure both are selected and not equal
+        if not self.selected_a or not self.selected_b:
+            await interaction.response.send_message("Please select both characters before starting the match.", ephemeral=True)
+            return
+        if self.selected_a == self.selected_b:
+            await interaction.response.send_message("Please choose two different characters.", ephemeral=True)
+            return
+
+        # default ratios (admins can edit later via commands)
+        ratio_a = 1.50
+        ratio_b = 2.00
+
+        # create match (mirrors betopen logic)
+        global BETTING_OPEN, CURRENT_MATCH, BETS
+        if BETTING_OPEN:
+            await interaction.response.send_message("A betting round is already open. Close it before starting a new one.", ephemeral=True)
+            return
+
+        BETTING_OPEN = True
+        CURRENT_MATCH = {
+            'char_a': self.selected_a,
+            'base_ratio_a': ratio_a,
+            'ratio_a': ratio_a,
+            'char_b': self.selected_b,
+            'base_ratio_b': ratio_b,
+            'ratio_b': ratio_b,
+            'diapers': {},
+            'protections': {}
+        }
+        BETS = {self.selected_a: {}, self.selected_b: {}}
+        await interaction.response.send_message(f"**Betting is now open!**\n**{self.selected_a}** has odds of **{ratio_a:.2f}x**\n**{self.selected_b}** has odds of **{ratio_b:.2f}x**\nUse `!bet [character] [amount]` to place your bet. Use `!shop` to view purchasable items.", ephemeral=False)
+        # disable view (prevent re-use)
+        self.stop()
+        try:
+            await interaction.message.edit(view=None)
+        except Exception:
+            pass
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def createbetgui(ctx):
+    """Open an embed GUI for admins to pick two registered characters and start a match."""
+    registry = load_registry()
+    if not registry:
+        await ctx.send("No characters registered. Use `!registerchars` to import a select.def first.")
+        return
+
+    # warn if registry is larger than 25 (select will show only first 25)
+    note = ""
+    if len(registry) > 25:
+        note = "\n\nNote: Discord selects can show up to 25 options. Use `!showregistry` if you need to find a character not in the first 25."
+
+    embed = discord.Embed(title="Create Match from Registry", description="Pick character A and B from the dropdowns below." + note, color=discord.Color.green())
+    view = CharacterSelectView(registry)
+    await ctx.send(embed=embed, view=view)
+
+# ---------------------------
+# (existing commands continue below)
+# ---------------------------
+
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def betopen(ctx, character_a: str, ratio_a: float, character_b: str, ratio_b: float):
@@ -174,7 +374,8 @@ async def betopen(ctx, character_a: str, ratio_a: float, character_b: str, ratio
         'char_b': character_b,
         'base_ratio_b': ratio_b,
         'ratio_b': ratio_b,
-        'diapers': {}  # mapping character -> list of applied diaper dicts
+        'diapers': {},  # mapping character -> list of applied diaper dicts
+        'protections': {}
     }
     BETS = {character_a: {}, character_b: {}}
 
@@ -431,6 +632,16 @@ async def betsummary(ctx):
             for item in applied:
                 message += f"  * {item['name']} (-{int(item['penalty']*100)}%) bought by <@{item['buyer']}> for {item['price']} points\n"
 
+    # Show protections (e.g. Newt's Soap Shoes) if any
+    protections = CURRENT_MATCH.get('protections', {})
+    if protections:
+        message += "\n**Protections (immunities):**\n"
+        for char, applied in protections.items():
+            message += f"- {char}:\n"
+            for item in applied:
+                display = SHOP_ITEMS.get(item['name'], {}).get('display_name', item['name'])
+                message += f"  * {display} bought by <@{item['buyer']}> for {item['price']} points\n"
+
     await ctx.send(message)
 
 @bot.command()
@@ -595,7 +806,8 @@ async def shop(ctx):
     msg += "- diaper_medium: 250 points (reduces a character's odds by 25%)\n"
     msg += "- diaper_large: 500 points (reduces a character's odds by 50%)\n"
     msg += "- wedding_ring: 1000 points (give a user +0.5 bonus to payouts)\n"
-    msg += "\nUsage: `!buydiaper <character> <small|medium|large>` or `!buyring @user`\n"
+    msg += "- soap_shoes: 300 points (Newt's Soap Shoes — protects a character from diapers; says \"uh meow?\" when bought)\n"
+    msg += "\nUsage: `!buydiaper <character> <small|medium|large>`, `!buyring @user` or `!buysoap <character>`\n"
     await ctx.send(msg)
 
 # --- GUI for the shop using Discord UI components ---
@@ -643,6 +855,16 @@ class ShopView(discord.ui.View):
         )
         await interaction.response.send_message(text, ephemeral=True)
 
+    @discord.ui.button(label="soap_shoes", style=discord.ButtonStyle.success, custom_id="shop_soap_shoes")
+    async def soap_shoes_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        text = (
+            "**Newt's Soap Shoes** — 300 points\n"
+            "Effect: Protects a character from diapers for the remainder of the match and removes already-applied diapers for that character.\n"
+            "How to use: While a bet is open, use `!buysoap <character>` to apply. The bot will say `uh meow?` when bought.\n"
+            "Notes: Protections prevent future diaper purchases targeting that character."
+        )
+        await interaction.response.send_message(text, ephemeral=True)
+
     @discord.ui.button(label="Close", style=discord.ButtonStyle.gray, custom_id="shop_close")
     async def close_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
         try:
@@ -664,7 +886,8 @@ async def shopgui(ctx):
     embed.add_field(name="diaper_medium", value=f"{compute_price('diaper_medium')} points — reduces odds by 25%", inline=False)
     embed.add_field(name="diaper_large", value=f"{compute_price('diaper_large')} points — reduces odds by 50%", inline=False)
     embed.add_field(name="wedding_ring", value=f"{compute_price('wedding_ring')} points — gives a +0.5 payout bonus to a user", inline=False)
-    embed.add_field(name="Buy commands", value="`!buydiaper <character> <small|medium|large>`\n`!buyring @user`", inline=False)
+    embed.add_field(name="soap_shoes", value=f"{compute_price('soap_shoes')} points — Newt's Soap Shoes (protects from diapers)", inline=False)
+    embed.add_field(name="Buy commands", value="`!buydiaper <character> <small|medium|large>`\n`!buyring @user`\n`!buysoap <character>`", inline=False)
 
     view = ShopView()
     await ctx.send(embed=embed, view=view)
@@ -701,10 +924,6 @@ async def buydiaper(ctx, character: str, size: str):
         points[buyer_id] = STARTING_POINTS
         save_points(points)
 
-    if points[buyer_id] < price:
-        await ctx.send(f"You don't have enough points to buy this diaper. You need {price} points.")
-        return
-
     target_char = None
     if character.lower() == CURRENT_MATCH['char_a'].lower():
         target_char = CURRENT_MATCH['char_a']
@@ -714,6 +933,16 @@ async def buydiaper(ctx, character: str, size: str):
         ratio_key = 'ratio_b'
     else:
         await ctx.send(f"Invalid character. Please pick `{CURRENT_MATCH['char_a']}` or `{CURRENT_MATCH['char_b']}`.")
+        return
+
+    # Check for protections (e.g. Newt's Soap Shoes)
+    protections = CURRENT_MATCH.get('protections', {})
+    if target_char in protections and protections[target_char]:
+        await ctx.send(f"You cannot diaper {target_char}; they are protected (Newt's Soap Shoes).")
+        return
+
+    if points[buyer_id] < price:
+        await ctx.send(f"You don't have enough points to buy this diaper. You need {price} points.")
         return
 
     # Deduct points from buyer
@@ -738,6 +967,74 @@ async def buydiaper(ctx, character: str, size: str):
     CURRENT_MATCH['diapers'] = diapers
 
     await ctx.send(f"{ctx.author.mention} bought a **{size_key} diaper** for **{target_char}** for {price} points. {target_char}'s odds changed {old_ratio:.2f}x -> {new_ratio:.2f}x.")
+
+@bot.command()
+async def buysoap(ctx, character: str):
+    """Buy Newt's Soap Shoes to protect a character from diapers and remove already-applied diapers.
+    Usage: !buysoap <character>"""
+    global CURRENT_MATCH, BETTING_OPEN
+
+    if not BETTING_OPEN or not CURRENT_MATCH:
+        await ctx.send("No active betting match to target. Open a match with `!betopen` first.")
+        return
+
+    item_key = "soap_shoes"
+    item = SHOP_ITEMS[item_key]
+    price = compute_price(item_key)
+
+    buyer_id = str(ctx.author.id)
+    points = load_points()
+    if buyer_id not in points:
+        points[buyer_id] = STARTING_POINTS
+        save_points(points)
+
+    if points[buyer_id] < price:
+        await ctx.send(f"You don't have enough points to buy Newt's Soap Shoes. You need {price} points.")
+        return
+
+    target_char = None
+    if character.lower() == CURRENT_MATCH['char_a'].lower():
+        target_char = CURRENT_MATCH['char_a']
+        ratio_key = 'ratio_a'
+        base_key = 'base_ratio_a'
+    elif character.lower() == CURRENT_MATCH['char_b'].lower():
+        target_char = CURRENT_MATCH['char_b']
+        ratio_key = 'ratio_b'
+        base_key = 'base_ratio_b'
+    else:
+        await ctx.send(f"Invalid character. Please pick `{CURRENT_MATCH['char_a']}` or `{CURRENT_MATCH['char_b']}`.")
+        return
+
+    # Deduct points from buyer
+    points[buyer_id] -= price
+    save_points(points)
+
+    # Remove already-applied diapers for that character (if any) and reset ratio to base
+    diapers = CURRENT_MATCH.get('diapers', {})
+    removed_count = 0
+    if target_char in diapers:
+        removed_count = len(diapers[target_char])
+        del diapers[target_char]
+    CURRENT_MATCH['diapers'] = diapers
+
+    # Reset ratio to base ratio (diapers removed). Protections prevent future diapering.
+    old_ratio = CURRENT_MATCH[ratio_key]
+    CURRENT_MATCH[ratio_key] = CURRENT_MATCH[base_key]
+    new_ratio = CURRENT_MATCH[ratio_key]
+
+    # Record protection application
+    protections = CURRENT_MATCH.get('protections', {})
+    if target_char not in protections:
+        protections[target_char] = []
+    protections[target_char].append({
+        "name": item_key,
+        "price": price,
+        "buyer": buyer_id
+    })
+    CURRENT_MATCH['protections'] = protections
+
+    # Send the required phrase and info
+    await ctx.send(f"{ctx.author.mention} bought **Newt's Soap Shoes** for **{target_char}** for {price} points. uh meow?\nRemoved {removed_count} diapers. {target_char}'s odds changed {old_ratio:.2f}x -> {new_ratio:.2f}x.")
 
 @bot.command()
 async def buyring(ctx, member: discord.Member):
