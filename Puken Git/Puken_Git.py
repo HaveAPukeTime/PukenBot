@@ -262,14 +262,14 @@ async def registerchars(ctx, filepath: str = "select.def"):
     await ctx.send(f"Registered {len(chars)} characters to `{REGISTRY_FILE}`. Use `!showregistry` to view them.")
     class CharacterSelectView(discord.ui.View):
         def __init__(self, registry):
-        super().__init__(timeout=None)
-        self.registry = registry
-        self.selected_a = None
-        self.selected_b = None
+            super().__init__(timeout=None)
+            self.registry = registry
+            self.selected_a = None
+            self.selected_b = None
 
-        # Add dropdowns
-        self.add_item(CharacterSelectDropdown(self, "A"))
-        self.add_item(CharacterSelectDropdown(self, "B"))
+            # Add dropdowns
+            self.add_item(CharacterSelectDropdown(self, "A"))
+            self.add_item(CharacterSelectDropdown(self, "B"))
 class CharacterSelectDropdown(discord.ui.Select):
         def __init__(self, parent_view, slot):
         self.parent_view = parent_view
