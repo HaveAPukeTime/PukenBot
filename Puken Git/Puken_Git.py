@@ -388,3 +388,43 @@ class ShopView(discord.ui.View):
                 await interaction.response.send_message("An internal error occurred starting the match.", ephemeral=True)
             except Exception:
                 pass
+
+if __name__ == '__main__':
+    # Try env first (supports .env via load_dotenv above)
+    token = os.environ.get('DISCORD_TOKEN') or os.environ.get('TOKEN')
+
+    # Attempt to locate/load a .env file explicitly and re-check
+    try:
+        from dotenv import find_dotenv, load_dotenv as _load_dotenv
+        env_path = find_dotenv()
+        if env_path:
+            logging.info(f".env found at: {env_path}")
+            # do not override existing env vars; load values missing into os.environ
+            _load_dotenv(env_path, override=False)
+            token = token or os.environ.get('DISCORD_TOKEN') or os.environ.get('TOKEN')
+        else:
+            logging.info(".env not found by find_dotenv()")
+    except Exception:
+        logging.info("python-dotenv not available or failed; relying on environment variables")
+
+    if not token:
+        logging.error("Discord token not found in environment or .env.")
+        logging.info("Options: create a .env with a line `DISCORD_TOKEN=your_token` or set the DISCORD_TOKEN/TOKEN env var.")
+        # Prompt interactively as a fallback (useful for manual runs)
+        try:
+            token_input = input("Enter bot token (or press Enter to abort): ").strip()
+            token = token_input or None
+        except Exception:
+            token = None
+
+    if not token:
+        logging.error("No token provided. Exiting.")
+        raise SystemExit(1)
+
+    # safe confirmation (do not print token)
+    logging.info(f"Discord token loaded (length: {len(token)}). Starting bot.")
+    try:
+        bot.run(token)
+    except Exception:
+        logging.exception("bot.run() failed with an exception:")
+        raise
