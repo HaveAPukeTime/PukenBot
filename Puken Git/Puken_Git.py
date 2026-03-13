@@ -250,50 +250,141 @@ async def registerchars(ctx, filepath: str = "select.def"):
     """
     try:
         chars = parse_select_def(filepath)
-    expected File "/usr/lib/python3.8/site-packages/discord/ui.py", line 443, in _scheduled_send
-        await self.message.edit(view=self)
-    except Exception:
-        await interaction.response.send_message("Shop closed.", ephemeral=True)
+    except FileNotFoundError:
+        await ctx.send(f"select.def not found at `{filepath}`.")
+        return
 
-@bot.command()
-async def shop(ctx):
-    """Show simple text list of shop items (quick)."""
-    lines = []
-    for key, meta in SHOP_ITEMS.items():
-        price = compute_price(key)
-        if key.startswith("diaper"):
-            lines.append(f"- {key}: {price} pts — reduces odds by {int(meta['penalty']*100)}%")
-        elif key == "wedding_ring":
-            lines.append(f"- {key}: {price} pts — gives +{meta['bonus']} payout bonus")
-        elif key == "soap_shoes":
-            lines.append(f"- {key}: {price} pts — protects a character from diapers")
-        else:
-            lines.append(f"- {key}: {price} pts")
-    lines.append("\nBuy with `!buydiaper`, `!buyring @user`, `!buysoap <character>`")
-    await ctx.send("__**Shop Items**__\n" + "\n".join(lines))
+    if not chars:
+        await ctx.send("No characters found in the provided select.def (or section missing).")
+        return
 
-@bot.command()
-async def shopgui(ctx):
-    """Open the interactive shop GUI (buttons show details)."""
-    embed = discord.Embed(title="Puken Shop", description="Click buttons to view item details.", color=discord.Color.blue())
-    embed.add_field(name="diaper_small", value=f"{compute_price('diaper_small')} pts — -10%", inline=False)
-    embed.add_field(name="diaper_medium", value=f"{compute_price('diaper_medium')} pts — -25%", inline=False)
-    embed.add_field(name="diaper_large", value=f"{compute_price('diaper_large')} pts — -50%", inline=False)
-    embed.add_field(name="wedding_ring", value=f"{compute_price('wedding_ring')} pts — +0.5 payout", inline=False)
-    embed.add_field(name="soap_shoes", value=f"{compute_price('soap_shoes')} pts — protection", inline=False)
-    view = ShopView()
-    await ctx.send(embed=embed, view=view)
+    save_registry(chars)
+    await ctx.send(f"Registered {len(chars)} characters to `{REGISTRY_FILE}`. Use `!showregistry` to view them.")
 
-if __name__ == '__main__':
-    # Read token (supports .env via load_dotenv above)
-    token = os.environ.get('DISCORD_TOKEN') or os.environ.get('TOKEN')
-    if not token:
-        logging.error("Discord token not found. Set DISCORD_TOKEN or TOKEN environment variable or add a .env file.")
-        raise SystemExit(1)
+class ShopView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-    logging.info("Discord token found — starting bot.")
-    try:
-        bot.run(token)
-    except Exception:
-        logging.exception("bot.run() failed with an exception:")
-        raise
+    @discord.ui.button(label="diaper_small", style=discord.ButtonStyle.secondary, custom_id="shop_diaper_small")
+    async def diaper_small_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        price = compute_price("diaper_small")
+        text = (
+            f"**diaper_small** — {price} points\n"
+            "Effect: Reduces a character's odds by 10% (multiplicative).\n"
+            "Use: `!buydiaper <character> small`"
+        )
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @discord.ui.button(label="diaper_medium", style=discord.ButtonStyle.secondary, custom_id="shop_diaper_medium")
+    async def diaper_medium_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        price = compute_price("diaper_medium")
+        text = (
+            f"**diaper_medium** — {price} points\n"
+            "Effect: Reduces a character's odds by 25% (multiplicative).\n"
+            "Use: `!buydiaper <character> medium`"
+        )
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @discord.ui.button(label="diaper_large", style=discord.ButtonStyle.danger, custom_id="shop_diaper_large")
+    async def diaper_large_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        price = compute_price("diaper_large")
+        text = (
+            f"**diaper_large** — {price} points\n"
+            "Effect: Reduces a character's odds by 50% (multiplicative).\n"
+            "Use: `!buydiaper <character> large`"
+        )
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @discord.ui.button(label="wedding_ring", style=discord.ButtonStyle.primary, custom_id="shop_wedding_ring")
+    async def wedding_ring_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        price = compute_price("wedding_ring")
+        text = (
+            f"**wedding_ring** — {price} points\n"
+            "Effect: Gives a user a +0.5 payout bonus. Use `!buyring @user`."
+        )
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @discord.ui.button(label="soap_shoes", style=discord.ButtonStyle.success, custom_id="shop_soap_shoes")
+    async def soap_shoes_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        price = compute_price("soap_shoes")
+        text = (
+            f"**Newt's Soap Shoes** — {price} points\n"
+            "Effect: Protects a character from diapers. Use `!buysoap <character>`."
+        )
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.gray, custom_id="shop_close")
+    async def close_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        try:
+            await interaction.response.edit_message(content="Shop (closed).", embed=None, view=None)
+        except Exception:
+            try:
+                await interaction.response.send_message("Shop closed.", ephemeral=True)
+            except Exception:
+                pass
+
+    @discord.ui.button(label="Start Match", style=discord.ButtonStyle.primary, custom_id="start_match_btn")
+    async def start_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        try:
+            # ensure both are selected and not equal
+            if not self.selected_a or not self.selected_b:
+                await interaction.response.send_message("Please select both characters before starting the match.", ephemeral=True)
+                return
+            if self.selected_a == self.selected_b:
+                await interaction.response.send_message("Please choose two different characters.", ephemeral=True)
+                return
+
+            # default ratios (admins can edit later via commands)
+            ratio_a = 1.50
+            ratio_b = 2.00
+
+            # create match (mirrors betopen logic)
+            global BETTING_OPEN, CURRENT_MATCH, BETS
+            if BETTING_OPEN:
+                await interaction.response.send_message("A betting round is already open. Close it before starting a new one.", ephemeral=True)
+                return
+
+            BETTING_OPEN = True
+            CURRENT_MATCH = {
+                'char_a': self.selected_a,
+                'base_ratio_a': ratio_a,
+                'ratio_a': ratio_a,
+                'char_b': self.selected_b,
+                'base_ratio_b': ratio_b,
+                'ratio_b': ratio_b,
+                'diapers': {},
+                'protections': {}
+            }
+            BETS = {self.selected_a: {}, self.selected_b: {}}
+
+            # Build and send the betting GUI as the interaction response
+            try:
+                embed = build_betting_embed()
+                view = BettingView()
+                await interaction.response.send_message(embed=embed, view=view)
+                # retrieve the sent message so we can store refs
+                try:
+                    msg = await interaction.original_response()
+                    store_gui_refs(msg, view)
+                except Exception as e:
+                    print("start_btn: failed to retrieve/store gui message:", e)
+            except Exception as e:
+                print("start_btn: failed to post betting GUI:", e)
+                try:
+                    await interaction.followup.send(f"**Betting is now open!**\n**{self.selected_a}** {ratio_a:.2f}x vs **{self.selected_b}** {ratio_b:.2f}x\nUse `!openbetgui` to open the betting GUI.", ephemeral=False)
+                except Exception:
+                    pass
+
+            # disable selection view (prevent re-use)
+            self.stop()
+            # remove the selection view from the original message where it was posted
+            try:
+                await interaction.message.edit(view=None)
+            except Exception as e:
+                print("start_btn: failed to edit original message to remove view:", e)
+        except Exception as e:
+            print("start_btn error:", e)
+            try:
+                await interaction.response.send_message("An internal error occurred starting the match.", ephemeral=True)
+            except Exception:
+                pass
