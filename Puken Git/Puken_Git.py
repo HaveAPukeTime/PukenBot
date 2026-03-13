@@ -250,180 +250,38 @@ async def registerchars(ctx, filepath: str = "select.def"):
     """
     try:
         chars = parse_select_def(filepath)
-    except FileNotFoundError:
-        await ctx.send(f"select.def not found at `{filepath}`.")
-        return
-
-    if not chars:
-        await ctx.send("No characters found in the provided select.def (or section missing).")
-        return
-
-    save_registry(chars)
-    await ctx.send(f"Registered {len(chars)} characters to `{REGISTRY_FILE}`. Use `!showregistry` to view them.")
+    expected File "/usr/lib/python3.8/site-packages/discord/ui.py", line 443, in _scheduled_send
+        await self.message.edit(view=self)
+    except Exception:
+        await interaction.response.send_message("Shop closed.", ephemeral=True)
 
 @bot.command()
-async def showregistry(ctx, limit: int = 50):
-    """Show registered characters (up to `limit`)."""
-    chars = load_registry()
-    if not chars:
-        await ctx.send("No characters registered. Use `!registerchars` to import a select.def.")
-        return
-    display = "\n".join(f"{i+1}. {name}" for i, name in enumerate(chars[:limit]))
-    await ctx.send(f"**Registered characters (showing {min(limit, len(chars))} of {len(chars)}):**\n{display}")
-
-# ---------------------------
-# GUI to pick two characters and start a match
-# ---------------------------
-def store_gui_refs(message: discord.Message, view: discord.ui.View):
-    """Keep message ids in CURRENT_MATCH and keep view instance in-memory."""
-    try:
-        CURRENT_MATCH['gui_channel_id'] = message.channel.id
-        CURRENT_MATCH['gui_message_id'] = message.id
-        # in-memory only; lost on restart but useful while running
-        CURRENT_MATCH['gui_view'] = view
-    except Exception as e:
-        print("store_gui_refs error:", e)
-
-async def update_betting_gui():
-    """Edit the stored GUI message with the latest embed and active view."""
-    try:
-        if not CURRENT_MATCH:
-            return
-        chan_id = CURRENT_MATCH.get('gui_channel_id')
-        msg_id = CURRENT_MATCH.get('gui_message_id')
-        if not chan_id or not msg_id:
-            return
-        channel = bot.get_channel(int(chan_id)) or await bot.fetch_channel(int(chan_id))
-        message = await channel.fetch_message(int(msg_id))
-        view = CURRENT_MATCH.get('gui_view') or BettingView()
-        CURRENT_MATCH['gui_view'] = view
-        await message.edit(embed=build_betting_embed(), view=view)
-    except Exception as e:
-        print("update_betting_gui error:", e)
-
-class CharacterSelectView(discord.ui.View):
-    def __init__(self, registry):
-        super().__init__(timeout=120)
-        # limit to first 25 choices (discord select limit)
-        options = [discord.SelectOption(label=name, value=name) for name in registry[:25]]
-        self.select_a = discord.ui.Select(placeholder="Choose character A", min_values=1, max_values=1, options=options, custom_id="char_select_a")
-        self.select_b = discord.ui.Select(placeholder="Choose character B", min_values=1, max_values=1, options=options, custom_id="char_select_b")
-        self.add_item(self.select_a)
-        self.add_item(self.select_b)
-        self.selected_a = None
-        self.selected_b = None
-
-        async def select_a_callback(interaction: discord.Interaction):
-            try:
-                self.selected_a = self.select_a.values[0]
-                await interaction.response.send_message(f"Selected A: {self.selected_a}", ephemeral=True)
-            except Exception as e:
-                print("select_a_callback error:", e)
-                try:
-                    await interaction.response.send_message("An error occurred processing your selection.", ephemeral=True)
-                except Exception:
-                    pass
-
-        async def select_b_callback(interaction: discord.Interaction):
-            try:
-                self.selected_b = self.select_b.values[0]
-                await interaction.response.send_message(f"Selected B: {self.selected_b}", ephemeral=True)
-            except Exception as e:
-                print("select_b_callback error:", e)
-                try:
-                    await interaction.response.send_message("An error occurred processing your selection.", ephemeral=True)
-                except Exception:
-                    pass
-
-        self.select_a.callback = select_a_callback
-        self.select_b.callback = select_b_callback
-
-    @discord.ui.button(label="Start Match", style=discord.ButtonStyle.primary, custom_id="start_match_btn")
-    async def start_btn(self, interaction: discord.Interaction):
-        try:
-            # ensure both are selected and not equal
-            if not self.selected_a or not self.selected_b:
-                await interaction.response.send_message("Please select both characters before starting the match.", ephemeral=True)
-                return
-            if self.selected_a == self.selected_b:
-                await interaction.response.send_message("Please choose two different characters.", ephemeral=True)
-                return
-
-            # default ratios (admins can edit later via commands)
-            ratio_a = 1.50
-            ratio_b = 2.00
-
-            # create match (mirrors betopen logic)
-            global BETTING_OPEN, CURRENT_MATCH, BETS
-            if BETTING_OPEN:
-                await interaction.response.send_message("A betting round is already open. Close it before starting a new one.", ephemeral=True)
-                return
-
-            BETTING_OPEN = True
-            CURRENT_MATCH = {
-                'char_a': self.selected_a,
-                'base_ratio_a': ratio_a,
-                'ratio_a': ratio_a,
-                'char_b': self.selected_b,
-                'base_ratio_b': ratio_b,
-                'ratio_b': ratio_b,
-                'diapers': {},
-                'protections': {}
-            }
-            BETS = {self.selected_a: {}, self.selected_b: {}}
-
-            # Build and send the betting GUI as the interaction response
-            try:
-                embed = build_betting_embed()
-                view = BettingView()
-                await interaction.response.send_message(embed=embed, view=view)
-                # retrieve the sent message so we can store refs
-                try:
-                    msg = await interaction.original_response()
-                    store_gui_refs(msg, view)
-                except Exception as e:
-                    print("start_btn: failed to retrieve/store gui message:", e)
-            except Exception as e:
-                print("start_btn: failed to post betting GUI:", e)
-                try:
-                    await interaction.followup.send(f"**Betting is now open!**\n**{self.selected_a}** {ratio_a:.2f}x vs **{self.selected_b}** {ratio_b:.2f}x\nUse `!openbetgui` to open the betting GUI.", ephemeral=False)
-                except Exception:
-                    pass
-
-            # disable selection view (prevent re-use)
-            self.stop()
-            # remove the selection view from the original message where it was posted
-            try:
-                # interaction.message is the message that had the selection view
-                await interaction.message.edit(view=None)
-            except Exception as e:
-                print("start_btn: failed to edit original message to remove view:", e)
-        except Exception as e:
-            print("start_btn error:", e)
-            try:
-                await interaction.response.send_message("An internal error occurred starting the match.", ephemeral=True)
-            except Exception:
-                pass
+async def shop(ctx):
+    """Show simple text list of shop items (quick)."""
+    lines = []
+    for key, meta in SHOP_ITEMS.items():
+        price = compute_price(key)
+        if key.startswith("diaper"):
+            lines.append(f"- {key}: {price} pts — reduces odds by {int(meta['penalty']*100)}%")
+        elif key == "wedding_ring":
+            lines.append(f"- {key}: {price} pts — gives +{meta['bonus']} payout bonus")
+        elif key == "soap_shoes":
+            lines.append(f"- {key}: {price} pts — protects a character from diapers")
+        else:
+            lines.append(f"- {key}: {price} pts")
+    lines.append("\nBuy with `!buydiaper`, `!buyring @user`, `!buysoap <character>`")
+    await ctx.send("__**Shop Items**__\n" + "\n".join(lines))
 
 @bot.command()
-@commands.has_permissions(administrator=True)
-async def createbetgui(ctx):
-    """Open an admin GUI to pick two registered characters and start a match."""
-    registry = load_registry()
-    if not registry:
-        await ctx.send("No characters registered. Use `!registerchars` to import a select.def first.")
-        return
-
-    note = ""
-    if len(registry) > 25:
-             note = "\n\nNote: Discord selects can show up to 25 options. Use `!showregistry` if you need to find a character not in the first 25."
-
-    embed = discord.Embed(
-        title="Create Match from Registry",
-        description="Pick character A and B from the dropdowns below." + note,
-        color=discord.Color.green()
-    )
-    view = CharacterSelectView(registry)
+async def shopgui(ctx):
+    """Open the interactive shop GUI (buttons show details)."""
+    embed = discord.Embed(title="Puken Shop", description="Click buttons to view item details.", color=discord.Color.blue())
+    embed.add_field(name="diaper_small", value=f"{compute_price('diaper_small')} pts — -10%", inline=False)
+    embed.add_field(name="diaper_medium", value=f"{compute_price('diaper_medium')} pts — -25%", inline=False)
+    embed.add_field(name="diaper_large", value=f"{compute_price('diaper_large')} pts — -50%", inline=False)
+    embed.add_field(name="wedding_ring", value=f"{compute_price('wedding_ring')} pts — +0.5 payout", inline=False)
+    embed.add_field(name="soap_shoes", value=f"{compute_price('soap_shoes')} pts — protection", inline=False)
+    view = ShopView()
     await ctx.send(embed=embed, view=view)
 
 if __name__ == '__main__':
