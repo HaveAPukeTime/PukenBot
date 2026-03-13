@@ -260,6 +260,47 @@ async def registerchars(ctx, filepath: str = "select.def"):
 
     save_registry(chars)
     await ctx.send(f"Registered {len(chars)} characters to `{REGISTRY_FILE}`. Use `!showregistry` to view them.")
+    class CharacterSelectView(discord.ui.View):
+    def __init__(self, registry):
+        super().__init__(timeout=None)
+        self.registry = registry
+        self.selected_a = None
+        self.selected_b = None
+
+        # Add dropdowns
+        self.add_item(CharacterSelectDropdown(self, "A"))
+        self.add_item(CharacterSelectDropdown(self, "B"))
+
+
+class CharacterSelectDropdown(discord.ui.Select):
+    def __init__(self, parent_view, slot):
+        self.parent_view = parent_view
+        self.slot = slot  # "A" or "B"
+
+        options = [
+            discord.SelectOption(label=char, value=char)
+            for char in parent_view.registry[:25]  # Discord limit
+        ]
+
+        super().__init__(
+            placeholder=f"Select Character {slot}",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        choice = self.values[0]
+
+        if self.slot == "A":
+            self.parent_view.selected_a = choice
+        else:
+            self.parent_view.selected_b = choice
+
+        await interaction.response.send_message(
+            f"Selected **Character {self.slot}: {choice}**",
+            ephemeral=True
+        )
 
 class ShopView(discord.ui.View):
     def __init__(self):
