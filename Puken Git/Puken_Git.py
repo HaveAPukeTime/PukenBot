@@ -374,13 +374,7 @@ async def betopen(ctx, character_a: str, ratio_a: float, character_b: str, ratio
         'char_b': character_b,
         'base_ratio_b': ratio_b,
         'ratio_b': ratio_b,
-<<<<<<< HEAD
-        'diapers': {},  # mapping character -> list of applied diaper dicts
-        'protections': {}
-=======
-        'diapers': {},      # mapping character -> list of applied diaper dicts
-        'protections': {}   # mapping character -> list of protection items (e.g. soap_shoes)
->>>>>>> 1c146965930be3c5317d9bd9c5f565fd1794219b
+        'diapers': {}  # mapping character -> list of applied diaper dicts
     }
     BETS = {character_a: {}, character_b: {}}
 
@@ -617,7 +611,7 @@ async def betsummary(ctx):
     message += "\n"
 
     # Summary for the second character
-    bets_b = BETS.get(char_b, {}
+    bets_b = BETS.get(char_b, {})
     total_b = sum(bets_b.values())
     message += f"**{char_b}** (Total Bets: {total_b} puken points) — Current Odds: {CURRENT_MATCH.get('ratio_b'):.2f}x\n"
     if bets_b:
@@ -1071,3 +1065,15 @@ async def buyring(ctx, member: discord.Member):
     rings[target_id] = prev + bonus  # allow stacking if desired
     save_rings(rings)
     await ctx.send(f"{ctx.author.mention} bought a wedding ring and gave <@{target_id}> a +{bonus:.1f} payout bonus. (Use this to 'erp' someone.)")
+
+
+if __name__ == '__main__':
+    # Read token from environment (supports .env via load_dotenv above)
+    token = os.environ.get('DISCORD_TOKEN') or os.environ.get('TOKEN')
+    if not token:
+        print("Discord token not found. Set DISCORD_TOKEN or TOKEN environment variable (or add to .env).")
+    else:
+        try:
+            bot.run(token)
+        except Exception as e:
+            print("Failed to start bot:", e)
