@@ -257,10 +257,7 @@ async def registerchars(ctx, filepath: str = "select.def"):
     if not chars:
         await ctx.send("No characters found in the provided select.def (or section missing).")
         return
-
-    save_registry(chars)
-    await ctx.send(f"Registered {len(chars)} characters to `{REGISTRY_FILE}`. Use `!showregistry` to view them.")
-   class CharacterSelectView(discord.ui.View):
+class CharacterSelectView(discord.ui.View):
     def __init__(self, registry):
         super().__init__(timeout=None)
         self.registry = registry
@@ -301,7 +298,6 @@ class CharacterSelectDropdown(discord.ui.Select):
             f"Selected **Character {self.slot}: {choice}**",
             ephemeral=True
         )
-
 
 class ShopView(discord.ui.View):
     def __init__(self):
