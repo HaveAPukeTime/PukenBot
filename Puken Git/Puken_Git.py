@@ -1,11 +1,9 @@
-﻿import discord
+import discord
 from discord.ext import commands
 import json
 import random
 import asyncio
 import os
-import logging
-import traceback
 
 # try to support .env files (optional)
 try:
@@ -13,9 +11,6 @@ try:
     load_dotenv()
 except Exception:
     pass
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # Define the bot's prefix and intents
 intents = discord.Intents.default()
@@ -257,49 +252,95 @@ async def registerchars(ctx, filepath: str = "select.def"):
     if not chars:
         await ctx.send("No characters found in the provided select.def (or section missing).")
         return
+
+    save_registry(chars)
+    await ctx.send(f"Registered {len(chars)} characters to `{REGISTRY_FILE}`. Use `!showregistry` to view them.")
+
+@bot.command()
+async def showregistry(ctx, limit: int = 50):
+    """Show registered characters (up to `limit`)."""
+    chars = load_registry()
+    if not chars:
+        await ctx.send("No characters registered. Use `!registerchars` to import a select.def.")
+        return
+    display = "\n".join(f"{i+1}. {name}" for i, name in enumerate(chars[:limit]))
+    await ctx.send(f"**Registered characters (showing {min(limit, len(chars))} of {len(chars)}):**\n{display}")
+
+# ---------------------------
+# GUI to pick two characters and start a match
+# ---------------------------
 class CharacterSelectView(discord.ui.View):
     def __init__(self, registry):
-        super().__init__(timeout=None)
-        self.registry = registry
+        super().__init__(timeout=120)
+        # limit to first 25 choices (discord select limit)
+        options = [discord.SelectOption(label=name, value=name) for name in registry[:25]]
+        self.select_a = discord.ui.Select(placeholder="Choose character A", min_values=1, max_values=1, options=options, custom_id="char_select_a")
+        self.select_b = discord.ui.Select(placeholder="Choose character B", min_values=1, max_values=1, options=options, custom_id="char_select_b")
+        self.add_item(self.select_a)
+        self.add_item(self.select_b)
         self.selected_a = None
         self.selected_b = None
 
-        # Add dropdowns
-        self.add_item(CharacterSelectDropdown(self, "A"))
-        self.add_item(CharacterSelectDropdown(self, "B"))
+        async def select_a_callback(interaction: discord.Interaction):
+            self.selected_a = self.select_a.values[0]
+            await interaction.response.send_message(f"Selected A: {self.selected_a}", ephemeral=True)
 
+        async def select_b_callback(interaction: discord.Interaction):
+            self.selected_b = self.select_b.values[0]
+            await interaction.response.send_message(f"Selected B: {self.selected_b}", ephemeral=True)
 
-class CharacterSelectDropdown(discord.ui.Select):
-    def __init__(self, parent_view, slot):
-        self.parent_view = parent_view
-        self.slot = slot  # "A" or "B"
+        self.select_a.callback = select_a_callback
+        self.select_b.callback = select_b_callback
 
-        options = [
-            discord.SelectOption(label=char, value=char)
-            for char in parent_view.registry[:25]  # Discord limit
-        ]
+    @discord.ui.button(label="Start Match", style=discord.ButtonStyle.primary, custom_id="start_match_btn")
+    async def start_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        # ensure both are selected and not equal
+        if not self.selected_a or not self.selected_b:
+            await interaction.response.send_message("Please select both characters before starting the match.", ephemeral=True)
+            return
+        if self.selected_a == self.selected_b:
+            await interaction.response.send_message("Please choose two different characters.", ephemeral=True)
+            return
 
-        super().__init__(
-            placeholder=f"Select Character {slot}",
-            min_values=1,
-            max_values=1,
-            options=options
-        )
+        # default ratios (admins can edit later via commands)
+        ratio_a = 1.50
+        ratio_b = 2.00
 
-    async def callback(self, interaction: discord.Interaction):
-        choice = self.values[0]
+        # create match (mirrors betopen logic)
+        global BETTING_OPEN, CURRENT_MATCH, BETS
+        if BETTING_OPEN:
+            await interaction.response.send_message("A betting round is already open. Close it before starting a new one.", ephemeral=True)
+            return
 
-        if self.slot == "A":
-            self.parent_view.selected_a = choice
-        else:
-            self.parent_view.selected_b = choice
+        BETTING_OPEN = True
+        CURRENT_MATCH = {
+            'char_a': self.selected_a,
+            'base_ratio_a': ratio_a,
+            'ratio_a': ratio_a,
+            'char_b': self.selected_b,
+            'base_ratio_b': ratio_b,
+            'ratio_b': ratio_b,
+            'diapers': {},
+            'protections': {}
+        }
+        BETS = {self.selected_a: {}, self.selected_b: {}}
+        await interaction.response.send_message(f"**Betting is now open!**\n**{self.selected_a}** has odds of **{ratio_a:.2f}x**\n**{self.selected_b}** has odds of **{ratio_b:.2f}x**\nUse `!bet [character] [amount]` to place your bet. Use `!shop` to view purchasable items.", ephemeral=False)
+        # disable view (prevent re-use)
+        self.stop()
+        try:
+            await interaction.message.edit(view=None)
+        except Exception:
+            pass
 
-        await interaction.response.send_message(
-            f"Selected **Character {self.slot}: {choice}**",
-            ephemeral=True
-        )
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def createbetgui(ctx):
+    """Open an embed GUI for admins to pick two registered characters and start a match."""
+    registry = load_registry()
+    if not registry:
+        await ctx.send("No characters registered. Use `!registerchars` to import a select.def first.")
+        return
 
-<<<<<<< HEAD
     # warn if registry is larger than 25 (select will show only first 25)
     note = ""
     if len(registry) > 25:
@@ -769,219 +810,187 @@ async def shop(ctx):
     await ctx.send(msg)
 
 # --- GUI for the shop using Discord UI components ---
-=======
->>>>>>> b213a80ffe30b43ca9d8f8031912b0b42e459021
 class ShopView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="diaper_small", style=discord.ButtonStyle.secondary, custom_id="shop_diaper_small")
     async def diaper_small_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
-        price = compute_price("diaper_small")
         text = (
-            f"**diaper_small** — {price} points\n"
+            "**diaper_small** — 100 points\n"
             "Effect: Reduces a character's odds by 10% (multiplicative).\n"
-            "Use: `!buydiaper <character> small`"
+            "How to use: While a bet is open, use `!buydiaper <character> small` to apply.\n"
+            "Notes: The reduction is multiplicative and recorded on the match; ratio won't drop below 0.1x."
         )
         await interaction.response.send_message(text, ephemeral=True)
 
     @discord.ui.button(label="diaper_medium", style=discord.ButtonStyle.secondary, custom_id="shop_diaper_medium")
     async def diaper_medium_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
-        price = compute_price("diaper_medium")
         text = (
-            f"**diaper_medium** — {price} points\n"
+            "**diaper_medium** — 250 points\n"
             "Effect: Reduces a character's odds by 25% (multiplicative).\n"
-            "Use: `!buydiaper <character> medium`"
+            "How to use: While a bet is open, use `!buydiaper <character> medium` to apply.\n"
+            "Notes: Stacks with other diapers and updates the current odds immediately."
         )
         await interaction.response.send_message(text, ephemeral=True)
 
     @discord.ui.button(label="diaper_large", style=discord.ButtonStyle.danger, custom_id="shop_diaper_large")
     async def diaper_large_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
-        price = compute_price("diaper_large")
         text = (
-            f"**diaper_large** — {price} points\n"
+            "**diaper_large** — 500 points\n"
             "Effect: Reduces a character's odds by 50% (multiplicative).\n"
-            "Use: `!buydiaper <character> large`"
+            "How to use: While a bet is open, use `!buydiaper <character> large` to apply.\n"
+            "Notes: This is the strongest diaper; use wisely."
         )
         await interaction.response.send_message(text, ephemeral=True)
 
     @discord.ui.button(label="wedding_ring", style=discord.ButtonStyle.primary, custom_id="shop_wedding_ring")
     async def wedding_ring_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
-        price = compute_price("wedding_ring")
         text = (
-            f"**wedding_ring** — {price} points\n"
-            "Effect: Gives a user a +0.5 payout bonus. Use `!buyring @user`."
+            "**wedding_ring** — 1000 points\n"
+            "Effect: Gives a user a +0.5 payout bonus (added to the winning ratio) when they win bets.\n"
+            "How to use: Buy and give to a user with `!buyring @user`.\n"
+            "Notes: The bot will send `adding littles up!` when a user with a ring places a bet. Bonuses stack if multiple rings are given."
         )
         await interaction.response.send_message(text, ephemeral=True)
 
     @discord.ui.button(label="soap_shoes", style=discord.ButtonStyle.success, custom_id="shop_soap_shoes")
     async def soap_shoes_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
-        price = compute_price("soap_shoes")
         text = (
-            f"**Newt's Soap Shoes** — {price} points\n"
-            "Effect: Protects a character from diapers. Use `!buysoap <character>`."
+            "**Newt's Soap Shoes** — 300 points\n"
+            "Effect: Protects a character from diapers for the remainder of the match and removes already-applied diapers for that character.\n"
+            "How to use: While a bet is open, use `!buysoap <character>` to apply. The bot will say `uh meow?` when bought.\n"
+            "Notes: Protections prevent future diaper purchases targeting that character."
         )
         await interaction.response.send_message(text, ephemeral=True)
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.gray, custom_id="shop_close")
     async def close_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
         try:
-            await interaction.response.edit_message(content="Shop (closed).", embed=None, view=None)
+            await interaction.message.edit(content="Shop (closed).", embed=None, view=None)
+            await interaction.response.send_message("Shop closed.", ephemeral=True)
         except Exception:
-            try:
-                await interaction.response.send_message("Shop closed.", ephemeral=True)
-            except Exception:
-                pass
-
-    @discord.ui.button(label="Start Match", style=discord.ButtonStyle.primary, custom_id="start_match_btn")
-    async def start_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
-        try:
-            # ensure both are selected and not equal
-            if not self.selected_a or not self.selected_b:
-                await interaction.response.send_message("Please select both characters before starting the match.", ephemeral=True)
-                return
-            if self.selected_a == self.selected_b:
-                await interaction.response.send_message("Please choose two different characters.", ephemeral=True)
-                return
-
-            # default ratios (admins can edit later via commands)
-            ratio_a = 1.50
-            ratio_b = 2.00
-
-            # create match (mirrors betopen logic)
-            global BETTING_OPEN, CURRENT_MATCH, BETS
-            if BETTING_OPEN:
-                await interaction.response.send_message("A betting round is already open. Close it before starting a new one.", ephemeral=True)
-                return
-
-            BETTING_OPEN = True
-            CURRENT_MATCH = {
-                'char_a': self.selected_a,
-                'base_ratio_a': ratio_a,
-                'ratio_a': ratio_a,
-                'char_b': self.selected_b,
-                'base_ratio_b': ratio_b,
-                'ratio_b': ratio_b,
-                'diapers': {},
-                'protections': {}
-            }
-            BETS = {self.selected_a: {}, self.selected_b: {}}
-
-            # Build and send the betting GUI as the interaction response
-            try:
-                embed = build_betting_embed()
-                view = BettingView()
-                await interaction.response.send_message(embed=embed, view=view)
-                # retrieve the sent message so we can store refs
-                try:
-                    msg = await interaction.original_response()
-                    store_gui_refs(msg, view)
-                except Exception as e:
-                    print("start_btn: failed to retrieve/store gui message:", e)
-            except Exception as e:
-                print("start_btn: failed to post betting GUI:", e)
-                try:
-                    await interaction.followup.send(f"**Betting is now open!**\n**{self.selected_a}** {ratio_a:.2f}x vs **{self.selected_b}** {ratio_b:.2f}x\nUse `!openbetgui` to open the betting GUI.", ephemeral=False)
-                except Exception:
-                    pass
-
-            # disable selection view (prevent re-use)
-            self.stop()
-            # remove the selection view from the original message where it was posted
-            try:
-                await interaction.message.edit(view=None)
-            except Exception as e:
-                print("start_btn: failed to edit original message to remove view:", e)
-        except Exception as e:
-            print("start_btn error:", e)
-            try:
-                await interaction.response.send_message("An internal error occurred starting the match.", ephemeral=True)
-            except Exception:
-                pass
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def createbetgui(ctx):
-    """Open an admin GUI to pick two registered characters and start a match."""
-    registry = load_registry()
-    if not registry:
-        await ctx.send("No characters registered. Use `!registerchars` to import a select.def first.")
-        return
-
-    note = ""
-    if len(registry) > 25:
-        note = "\n\nNote: Discord selects show up to 25 options. Use `!showregistry` if you need a character not in the first 25."
-
-    embed = discord.Embed(
-        title="Create Match from Registry",
-        description="Pick character A and B from the dropdowns below." + note,
-        color=discord.Color.green()
-    )
-    view = CharacterSelectView(registry)
-    await ctx.send(embed=embed, view=view)
-
-@bot.command()
-async def shop(ctx):
-    """Text list of shop items."""
-    lines = []
-    for key, meta in SHOP_ITEMS.items():
-        price = compute_price(key)
-        if key.startswith("diaper"):
-            lines.append(f"- {key}: {price} pts — reduces odds by {int(meta['penalty']*100)}%")
-        elif key == "wedding_ring":
-            lines.append(f"- {key}: {price} pts — gives +{meta['bonus']} payout bonus")
-        elif key == "soap_shoes":
-            lines.append(f"- {key}: {price} pts — protects a character from diapers")
-        else:
-            lines.append(f"- {key}: {price} pts")
-    lines.append("\nBuy with `!buydiaper <character> <small|medium|large>`, `!buyring @user`, `!buysoap <character>`")
-    await ctx.send("__**Shop Items**__\n" + "\n".join(lines))
+            await interaction.response.send_message("Shop closed.", ephemeral=True)
 
 @bot.command()
 async def shopgui(ctx):
-    """Interactive shop GUI."""
-    embed = discord.Embed(title="Puken Shop", description="Click buttons to view item details.", color=discord.Color.blue())
-    embed.add_field(name="diaper_small", value=f"{compute_price('diaper_small')} pts — -10%", inline=False)
-    embed.add_field(name="diaper_medium", value=f"{compute_price('diaper_medium')} pts — -25%", inline=False)
-    embed.add_field(name="diaper_large", value=f"{compute_price('diaper_large')} pts — -50%", inline=False)
-    embed.add_field(name="wedding_ring", value=f"{compute_price('wedding_ring')} pts — +0.5 payout", inline=False)
-    embed.add_field(name="soap_shoes", value=f"{compute_price('soap_shoes')} pts — protection", inline=False)
+    """Opens an interactive shop GUI that explains items and prices."""
+    embed = discord.Embed(
+        title="Puken Shop",
+        description="Click any button to see detailed info about an item. Buy items using the text commands shown below.",
+        color=discord.Color.blue()
+    )
+    # compute_price is defined above, so this will no longer raise NameError
+    embed.add_field(name="diaper_small", value=f"{compute_price('diaper_small')} points — reduces odds by 10%", inline=False)
+    embed.add_field(name="diaper_medium", value=f"{compute_price('diaper_medium')} points — reduces odds by 25%", inline=False)
+    embed.add_field(name="diaper_large", value=f"{compute_price('diaper_large')} points — reduces odds by 50%", inline=False)
+    embed.add_field(name="wedding_ring", value=f"{compute_price('wedding_ring')} points — gives a +0.5 payout bonus to a user", inline=False)
+    embed.add_field(name="soap_shoes", value=f"{compute_price('soap_shoes')} points — Newt's Soap Shoes (protects from diapers)", inline=False)
+    embed.add_field(name="Buy commands", value="`!buydiaper <character> <small|medium|large>`\n`!buyring @user`\n`!buysoap <character>`", inline=False)
+
     view = ShopView()
     await ctx.send(embed=embed, view=view)
 
-if __name__ == '__main__':
-    # Try env first (supports .env via load_dotenv above)
-    token = os.environ.get('DISCORD_TOKEN') or os.environ.get('TOKEN')
+@bot.command()
+async def buydiaper(ctx, character: str, size: str):
+    """Buy a diaper to reduce the payout ratio of a character in the currently open bet.
+    Usage: !buydiaper <character> <small|medium|large>"""
+    global CURRENT_MATCH, BETTING_OPEN
 
-    # Attempt to locate/load a .env file explicitly and re-check
-    try:
-        from dotenv import find_dotenv, load_dotenv as _load_dotenv
-        env_path = find_dotenv()
-        if env_path:
-            logging.info(f".env found at: {env_path}")
-            # do not override existing env vars; load values missing into os.environ
-            _load_dotenv(env_path, override=False)
-            token = token or os.environ.get('DISCORD_TOKEN') or os.environ.get('TOKEN')
-        else:
-            logging.info(".env not found by find_dotenv()")
-    except Exception:
-        logging.info("python-dotenv not available or failed; relying on environment variables")
+    if not BETTING_OPEN or not CURRENT_MATCH:
+        await ctx.send("No active betting match to target. Open a match with `!betopen` first.")
+        return
 
-    if not token:
-        logging.error("Discord token not found in environment or .env.")
-        logging.info("Options: create a .env with a line `DISCORD_TOKEN=your_token` or set the DISCORD_TOKEN/TOKEN env var.")
-        # Prompt interactively as a fallback (useful for manual runs)
-        try:
-            token_input = input("Enter bot token (or press Enter to abort): ").strip()
-            token = token_input or None
-        except Exception:
-            token = None
+    size_key = size.lower()
+    size_map = {
+        "small": "diaper_small",
+        "medium": "diaper_medium",
+        "large": "diaper_large"
+    }
+    if size_key not in size_map:
+        await ctx.send("Invalid size. Choose small, medium, or large.")
+        return
 
-    if not token:
-        logging.error("No token provided. Exiting.")
-        raise SystemExit(1)
+    item_key = size_map[size_key]
+    item = SHOP_ITEMS[item_key]
+    # use computed dynamic price if available
+    price = compute_price(item_key)
+    penalty = item["penalty"]
 
-<<<<<<< HEAD
+    buyer_id = str(ctx.author.id)
+    points = load_points()
+    if buyer_id not in points:
+        points[buyer_id] = STARTING_POINTS
+        save_points(points)
+
+    target_char = None
+    if character.lower() == CURRENT_MATCH['char_a'].lower():
+        target_char = CURRENT_MATCH['char_a']
+        ratio_key = 'ratio_a'
+    elif character.lower() == CURRENT_MATCH['char_b'].lower():
+        target_char = CURRENT_MATCH['char_b']
+        ratio_key = 'ratio_b'
+    else:
+        await ctx.send(f"Invalid character. Please pick `{CURRENT_MATCH['char_a']}` or `{CURRENT_MATCH['char_b']}`.")
+        return
+
+    # Check for protections (e.g. Newt's Soap Shoes)
+    protections = CURRENT_MATCH.get('protections', {})
+    if target_char in protections and protections[target_char]:
+        await ctx.send(f"You cannot diaper {target_char}; they are protected (Newt's Soap Shoes).")
+        return
+
+    if points[buyer_id] < price:
+        await ctx.send(f"You don't have enough points to buy this diaper. You need {price} points.")
+        return
+
+    # Deduct points from buyer
+    points[buyer_id] -= price
+    save_points(points)
+
+    # Apply penalty multiplicatively to the current ratio
+    old_ratio = CURRENT_MATCH[ratio_key]
+    new_ratio = max(0.1, old_ratio * (1 - penalty))  # ensure ratio doesn't drop below 0.1
+    CURRENT_MATCH[ratio_key] = new_ratio
+
+    # Record diaper application
+    diapers = CURRENT_MATCH.get('diapers', {})
+    if target_char not in diapers:
+        diapers[target_char] = []
+    diapers[target_char].append({
+        "name": item_key,
+        "price": price,
+        "penalty": penalty,
+        "buyer": buyer_id
+    })
+    CURRENT_MATCH['diapers'] = diapers
+
+    await ctx.send(f"{ctx.author.mention} bought a **{size_key} diaper** for **{target_char}** for {price} points. {target_char}'s odds changed {old_ratio:.2f}x -> {new_ratio:.2f}x.")
+
+@bot.command()
+async def buysoap(ctx, character: str):
+    """Buy Newt's Soap Shoes to protect a character from diapers and remove already-applied diapers.
+    Usage: !buysoap <character>"""
+    global CURRENT_MATCH, BETTING_OPEN
+
+    if not BETTING_OPEN or not CURRENT_MATCH:
+        await ctx.send("No active betting match to target. Open a match with `!betopen` first.")
+        return
+
+    item_key = "soap_shoes"
+    item = SHOP_ITEMS[item_key]
+    price = compute_price(item_key)
+
+    buyer_id = str(ctx.author.id)
+    points = load_points()
+    if buyer_id not in points:
+        points[buyer_id] = STARTING_POINTS
+        save_points(points)
+
+    if points[buyer_id] < price:
+        await ctx.send(f"You don't have enough points to buy Newt's Soap Shoes. You need {price} points.")
+        return
+
     target_char = None
     if character.lower() == CURRENT_MATCH['char_a'].lower():
         target_char = CURRENT_MATCH['char_a']
@@ -1068,12 +1077,3 @@ if __name__ == '__main__':
             bot.run(token)
         except Exception as e:
             print("Failed to start bot:", e)
-=======
-    # safe confirmation (do not print token)
-    logging.info(f"Discord token loaded (length: {len(token)}). Starting bot.")
-    try:
-        bot.run(token)
-    except Exception:
-        logging.exception("bot.run() failed with an exception:")
-        raise
->>>>>>> b213a80ffe30b43ca9d8f8031912b0b42e459021
